@@ -1,0 +1,67 @@
+name: Gerar IPA (iPhone)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Preparar a pasta www (acha os arquivos do app onde estiverem)
+        run: |
+          mkdir -p www
+          for f in index.html manifest.json sw.js icon.png; do
+            if [ ! -f "www/$f" ]; then
+              p=$(find . -type f -name "$f" -not -path "./node_modules/*" -not -path "./ios/*" -not -path "./.git/*" -not -path "./www/*" | head -1)
+              if [ -n "$p" ]; then cp "$p" "www/$f"; fi
+            fi
+          done
+          echo "Conteúdo da pasta www:"
+          ls -la www
+          if [ ! -f www/index.html ]; then
+            echo "ERRO: não encontrei o arquivo index.html no repositório. Envie a pasta www do zip para o GitHub."
+            exit 1
+          fi
+
+      - name: Instalar dependências
+        run: npm install
+
+      - name: Criar projeto iOS
+        run: npx cap add ios
+
+      - name: Gerar ícones do app (se falhar, usa o ícone padrão)
+        continue-on-error: true
+        run: |
+          npm install --no-save @capacitor/assets
+          npx capacitor-assets generate --ios
+
+      - name: Copiar o app para o iOS
+        run: npx cap sync ios
+
+      - name: Compilar sem assinatura
+        run: |
+          set -eo pipefail
+          xcodebuild -workspace ios/App/App.xcworkspace -scheme App -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -archivePath "$PWD/build/App.xcarchive" CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO archive
+
+      - name: Montar o arquivo .ipa
+        run: |
+          set -e
+          mkdir -p build/Payload
+          cp -R build/App.xcarchive/Products/Applications/App.app build/Payload/
+          cd build
+          zip -qry paginas.ipa Payload
+          ls -la paginas.ipa
+
+      - name: Guardar o IPA para download
+        uses: actions/upload-artifact@v4
+        with:
+          name: paginas-ipa
+          path: build/paginas.ipa
